@@ -1,0 +1,340 @@
+name: Build All 3 iPad Apps (.ipa)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ipad-ipa-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-three-ipad-ipas:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Latest Installed Xcode on Runner
+        shell: bash
+        run: |
+          if ls -d /Applications/Xcode_16*.app >/dev/null 2>&1; then
+            LATEST_XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -n 1)
+            echo "Selecting $LATEST_XCODE"
+            sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: Organize Sources, Entry Points, project.yml & Info.plist Files
+        shell: bash
+        run: |
+          set -e
+          rm -rf Sources Config iPadAIMediaSuite.xcodeproj build_ipas
+          mkdir -p Sources/ProMediaPlayerEnhanced
+          mkdir -p Sources/OfflineAIVideoStudio
+          mkdir -p Sources/CoreMLPackageConverter
+          mkdir -p Config
+          mkdir -p build_ipas
+
+          # Extract any uploaded zip bundle first
+          for z in *.zip; do
+            if [ -f "$z" ]; then
+              echo "Extracting $z..."
+              unzip -o "$z"
+            fi
+          done
+
+          # 1. Stage ProMediaPlayerEnhanced source
+          if [ -f "promediaplayerenhanced_5.swift" ]; then
+            cp "promediaplayerenhanced_5.swift" Sources/ProMediaPlayerEnhanced/ContentView.swift
+          elif [ -f "ProMediaPlayerEnhanced.swift" ]; then
+            cp "ProMediaPlayerEnhanced.swift" Sources/ProMediaPlayerEnhanced/ContentView.swift
+          fi
+
+          # 2. Stage OfflineAIVideoStudio source
+          if [ -f "OfflineAIVideoStudioApp.swift" ]; then
+            cp "OfflineAIVideoStudioApp.swift" Sources/OfflineAIVideoStudio/ContentView.swift
+          fi
+
+          # 3. Stage CoreMLPackageConverter source
+          if [ -f "CoreMLPackageConverterApp.swift" ]; then
+            cp "CoreMLPackageConverterApp.swift" Sources/CoreMLPackageConverter/ContentView.swift
+          fi
+
+          # Ensure ContentView.init(appState:) has a default value in ProMediaPlayerEnhanced
+          if [ -f "Sources/ProMediaPlayerEnhanced/ContentView.swift" ]; then
+            python3 -c '
+          p = "Sources/ProMediaPlayerEnhanced/ContentView.swift"
+          with open(p, "r", encoding="utf-8") as f:
+              t = f.read()
+          t = t.replace("public init(appState: AppSharedState) {", "public init(appState: AppSharedState = AppSharedState()) {")
+          with open(p, "w", encoding="utf-8") as f:
+              f.write(t)
+          '
+            if ! grep -q "@main" Sources/ProMediaPlayerEnhanced/ContentView.swift; then
+              cat << 'EOF' > Sources/ProMediaPlayerEnhanced/MyApp.swift
+          import SwiftUI
+
+          @main
+          struct ProMediaPlayerEnhancedApp: App {
+              @StateObject private var appState = AppSharedState()
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView(appState: appState)
+                          .preferredColorScheme(.dark)
+                          .onOpenURL { url in
+                              appState.ingestExternalVideoURL(url)
+                          }
+                  }
+              }
+          }
+          EOF
+            fi
+          fi
+
+          if [ -f "Sources/OfflineAIVideoStudio/ContentView.swift" ]; then
+            if ! grep -q "@main" Sources/OfflineAIVideoStudio/ContentView.swift; then
+              cat << 'EOF' > Sources/OfflineAIVideoStudio/MyApp.swift
+          import SwiftUI
+
+          @main
+          struct OfflineAIVideoStudioMainApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                          .preferredColorScheme(.dark)
+                  }
+              }
+          }
+          EOF
+            fi
+          fi
+
+          if [ -f "Sources/CoreMLPackageConverter/ContentView.swift" ]; then
+            if ! grep -q "@main" Sources/CoreMLPackageConverter/ContentView.swift; then
+              cat << 'EOF' > Sources/CoreMLPackageConverter/MyApp.swift
+          import SwiftUI
+
+          @main
+          struct CoreMLPackageConverterMainApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                          .preferredColorScheme(.dark)
+                  }
+              }
+          }
+          EOF
+            fi
+          fi
+
+          # Write Info.plist files into Config/ (OUTSIDE Sources/ so XcodeGen never duplicates them into Copy Bundle Resources)
+          make_plist() {
+            local plist_path="$1"
+            local display_name="$2"
+            local bundle_id="$3"
+            cat << EOF > "${plist_path}"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>${display_name}</string>
+              <key>CFBundleExecutable</key>
+              <string>\$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>${bundle_id}</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>\$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UIApplicationSceneManifest</key>
+              <dict>
+                  <key>UIApplicationSupportsMultipleScenes</key>
+                  <true/>
+              </dict>
+              <key>UILaunchScreen</key>
+              <dict/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationPortraitUpsideDown</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UISupportedInterfaceOrientations~ipad</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationPortraitUpsideDown</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UIBackgroundModes</key>
+              <array>
+                  <string>audio</string>
+                  <string>fetch</string>
+                  <string>processing</string>
+              </array>
+              <key>UIFileSharingEnabled</key>
+              <true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key>
+              <true/>
+              <key>NSPhotoLibraryAddUsageDescription</key>
+              <string>Save AI-enhanced 4K videos directly to your Photos library.</string>
+              <key>NSPhotoLibraryUsageDescription</key>
+              <string>Import and save AI-enhanced videos to your Photos library.</string>
+              <key>NSMicrophoneUsageDescription</key>
+              <string>Used for live AI audio caption translation when enabled.</string>
+              <key>NSSpeechRecognitionUsageDescription</key>
+              <string>Used for on-device live AI speech-to-English captions.</string>
+          </dict>
+          </plist>
+          EOF
+          }
+
+          make_plist "Config/ProMediaPlayerEnhanced-Info.plist" "Pro AI Player" "com.ai.ipadstudio.promediaplayer"
+          make_plist "Config/OfflineAIVideoStudio-Info.plist" "AI Video Studio" "com.ai.ipadstudio.offlinestudio"
+          make_plist "Config/CoreMLPackageConverter-Info.plist" "CoreML Converter" "com.ai.ipadstudio.coremlconverter"
+
+          # Unconditionally write project.yml using universal Xcode 15.0 project format (compatible with both Xcode 15 and Xcode 16, preventing xcodebuild Exit Code 74!)
+          cat << 'EOF' > project.yml
+          name: iPadAIMediaSuite
+          options:
+            bundleIdPrefix: com.ai.ipadstudio
+            deploymentTarget:
+              iOS: "16.0"
+            xcodeVersion: "15.0"
+            generateEmptyDirectories: true
+
+          settings:
+            base:
+              IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+              TARGETED_DEVICE_FAMILY: "1,2"
+              SUPPORTS_MACCATALYST: NO
+              SWIFT_VERSION: "5.0"
+              SWIFT_STRICT_CONCURRENCY: minimal
+              CODE_SIGNING_ALLOWED: NO
+              CODE_SIGNING_REQUIRED: NO
+              CODE_SIGN_IDENTITY: ""
+              AD_HOC_CODE_SIGNING_ALLOWED: YES
+              ENABLE_BITCODE: NO
+
+          targets:
+            ProMediaPlayerEnhanced:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources/ProMediaPlayerEnhanced
+              scheme: {}
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.ai.ipadstudio.promediaplayer
+                  PRODUCT_NAME: ProMediaPlayerEnhanced
+                  INFOPLIST_FILE: Config/ProMediaPlayerEnhanced-Info.plist
+
+            OfflineAIVideoStudio:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources/OfflineAIVideoStudio
+              scheme: {}
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.ai.ipadstudio.offlinestudio
+                  PRODUCT_NAME: OfflineAIVideoStudio
+                  INFOPLIST_FILE: Config/OfflineAIVideoStudio-Info.plist
+
+            CoreMLPackageConverter:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources/CoreMLPackageConverter
+              scheme: {}
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.ai.ipadstudio.coremlconverter
+                  PRODUCT_NAME: CoreMLPackageConverter
+                  INFOPLIST_FILE: Config/CoreMLPackageConverter-Info.plist
+          EOF
+
+      - name: Generate Xcode Project via XcodeGen
+        shell: bash
+        run: |
+          if ! command -v xcodegen &> /dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+
+      - name: Compile & Package All Available Targets into .ipa Files
+        shell: bash
+        run: |
+          set -e
+          for TARGET in ProMediaPlayerEnhanced OfflineAIVideoStudio CoreMLPackageConverter; do
+            if [ -f "Sources/${TARGET}/ContentView.swift" ]; then
+              echo "=========================================="
+              echo "Building ${TARGET} for iPadOS (arm64)..."
+              echo "=========================================="
+              xcodebuild build \
+                -project iPadAIMediaSuite.xcodeproj \
+                -target "${TARGET}" \
+                -configuration Release \
+                -sdk iphoneos \
+                SYMROOT="$(pwd)/build_${TARGET}" \
+                ARCHS=arm64 \
+                ONLY_ACTIVE_ARCH=NO \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGN_IDENTITY="" \
+                AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                SWIFT_STRICT_CONCURRENCY=minimal
+
+              APP_PATH=$(find "build_${TARGET}" -name "${TARGET}.app" -type d | head -n 1)
+              if [ -n "$APP_PATH" ]; then
+                rm -rf Payload
+                mkdir -p Payload
+                cp -R "$APP_PATH" Payload/
+                zip -r -q "build_ipas/${TARGET}.ipa" Payload
+                rm -rf Payload
+                echo "Successfully packaged build_ipas/${TARGET}.ipa"
+              else
+                echo "ERROR: Could not find ${TARGET}.app in build_${TARGET}"
+                exit 1
+              fi
+            else
+              echo "Skipping ${TARGET} (source file not uploaded yet)"
+            fi
+          done
+          ls -lh build_ipas/
+
+      - name: Upload All 3 .ipa Files as Downloadable Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPad-AI-Suite-IPAs
+          path: build_ipas/*.ipa
+          if-no-files-found: error
+
+      - name: Publish Direct Download Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "iPad AI Studio Suite (.ipa Build #${{ github.run_number }})"
+          body: "Direct `.ipa` downloads for SideStore / AltStore / Sideloadly on iPad Air M4:\n- **ProMediaPlayerEnhanced.ipa** (Live 60fps Metal Player + AI Enhancer)\n- **OfflineAIVideoStudio.ipa** (Standalone Batch Offline AI Video Mastering Studio)\n- **CoreMLPackageConverter.ipa** (`.mlpackage` to `.mlmodel` Converter)"
+          files: build_ipas/*.ipa
