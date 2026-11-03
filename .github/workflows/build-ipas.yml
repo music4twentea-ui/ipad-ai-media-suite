@@ -104,10 +104,10 @@ jobs:
                       1
                   )
           
-              # 3. Ensure ContentView.init(appState:) has default value
+              # 3. Ensure ContentView.init(appState:) does NOT call @MainActor AppSharedState() in a nonisolated default parameter
               text = text.replace(
-                  "public init(appState: AppSharedState) {",
-                  "public init(appState: AppSharedState = AppSharedState()) {"
+                  "public init(appState: AppSharedState = AppSharedState()) {",
+                  "public init(appState: AppSharedState) {"
               )
           
               # 4. Fix all nested `{ [weak self] ... in Task { @MainActor [weak self] in` patterns in promediaplayerenhanced_5.swift
@@ -520,13 +520,13 @@ jobs:
           options:
             bundleIdPrefix: com.ai.ipadstudio
             deploymentTarget:
-              iOS: "16.0"
+              iOS: "17.0"
             xcodeVersion: "15.0"
             generateEmptyDirectories: true
 
           settings:
             base:
-              IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+              IPHONEOS_DEPLOYMENT_TARGET: "17.0"
               TARGETED_DEVICE_FAMILY: "1,2"
               SUPPORTS_MACCATALYST: NO
               SWIFT_VERSION: "5.0"
@@ -629,7 +629,7 @@ jobs:
                 AD_HOC_CODE_SIGNING_ALLOWED=NO \
                 DEVELOPMENT_TEAM="" \
                 ASSETCATALOG_COMPILER_APPICON_NAME="" \
-                SWIFT_VERSION=5.0 \
+                IPHONEOS_DEPLOYMENT_TARGET=17.0                 SWIFT_VERSION=5.0 \
                 SWIFT_STRICT_CONCURRENCY=minimal > "build_${TARGET}.log" 2>&1
               RC=$?
 
